@@ -1,5 +1,6 @@
 export type Category = 'Football' | 'Basketball' | 'Rugby' | 'Athletics' | 'Other';
 export type OrderStatus = 'Pending' | 'Confirmed' | 'Preparing' | 'Out for Delivery' | 'Delivered' | 'Cancelled';
+export type ProductClassification = 'Regular' | 'Retro Kit' | 'Original Jersey';
 
 export interface ProductImage {
   id: string;
@@ -18,6 +19,7 @@ export interface Product {
   category: Category;
   season: string;
   jersey_type: string;
+  classification: ProductClassification;
   description: string | null;
   previous_price: number;
   current_price: number;
@@ -49,6 +51,8 @@ export interface ShopSettings {
   whatsapp_number: string;
   business_phone: string | null;
   business_description: string | null;
+  maintenance_mode: boolean;
+  maintenance_message: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -83,14 +87,19 @@ export interface Order {
   order_items?: OrderItem[];
 }
 
-export interface CartItem { product: Product; size: string; quantity: number; }
+export interface CartItem {
+  product: Product;
+  size: string;
+  quantity: number;
+}
+
 export interface OrderResult {
   orderNumber: string;
   orderId: string;
   whatsappText: string;
-  item: CartItem;
-  customer: { name: string; phone: string; location: string; date: string; time: string; instructions: string; };
+  items: CartItem[];
   total: number;
+  customer: { name: string; phone: string; location: string; date: string; time: string; instructions: string; };
 }
 
 export const formatKES = (value: number) => `KES ${new Intl.NumberFormat('en-KE').format(value)}`;
@@ -99,6 +108,7 @@ export const getSavings = (product: Product) => product.previous_price > product
   : 0;
 
 export const CATEGORY_OPTIONS: Category[] = ['Football', 'Basketball', 'Rugby', 'Athletics', 'Other'];
+export const CLASSIFICATION_OPTIONS: ProductClassification[] = ['Regular', 'Retro Kit', 'Original Jersey'];
 export const SIZE_OPTIONS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
 export const ORDER_STATUSES: OrderStatus[] = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled'];
 export const LOW_STOCK_THRESHOLD = 5;
