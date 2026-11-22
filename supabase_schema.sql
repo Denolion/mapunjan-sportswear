@@ -3,19 +3,20 @@
 
 Run this entire file once in Supabase Dashboard > SQL Editor > New Query.
 
-Creates admin_users, products, product_images, orders, order_items, delivery_locations, shop_settings, indexes, triggers, RLS, the product-images storage bucket, default delivery locations, default settings, and secure public order placement.
+Creates admin_users, products, product_images, orders, order_items, delivery_locations, shop_settings, indexes, triggers, RLS, the product-images storage bucket, default delivery locations, default settings, and secure public order placement (multi-item with maintenance mode blocking).
 */
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS admin_users (user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE, created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS products (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), team_name text NOT NULL, product_name text NOT NULL, category text NOT NULL CHECK (category IN ('Football','Basketball','Rugby','Athletics','Other')), season text NOT NULL, jersey_type text NOT NULL, description text, previous_price numeric(12,2) NOT NULL CHECK (previous_price >= 0), current_price numeric(12,2) NOT NULL CHECK (current_price >= 0), available_sizes text[] NOT NULL DEFAULT ARRAY['S','M','L','XL'], stock_quantity integer NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0), featured boolean NOT NULL DEFAULT false, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS products (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), team_name text NOT NULL, product_name text NOT NULL, category text NOT NULL CHECK (category IN ('Football','Basketball','Rugby','Athletics','Other')), season text NOT NULL, jersey_type text NOT NULL, classification text NOT NULL DEFAULT 'Regular' CHECK (classification IN ('Regular','Retro Kit','Original Jersey')), description text, previous_price numeric(12,2) NOT NULL CHECK (previous_price >= 0), current_price numeric(12,2) NOT NULL CHECK (current_price >= 0), available_sizes text[] NOT NULL DEFAULT ARRAY['S','M','L','XL'], stock_quantity integer NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0), featured boolean NOT NULL DEFAULT false, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS product_images (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE, image_url text NOT NULL, storage_path text, is_primary boolean NOT NULL DEFAULT false, sort_order integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS delivery_locations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL UNIQUE, sort_order integer NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS shop_settings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), shop_name text NOT NULL DEFAULT 'MAPUNJAN SPORTS WEAR', shop_address text NOT NULL DEFAULT 'Kakamega, Kenya', latitude numeric(10,7), longitude numeric(10,7), google_maps_url text, whatsapp_number text NOT NULL DEFAULT '+254798777231', business_phone text, business_description text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS shop_settings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), shop_name text NOT NULL DEFAULT 'MAPUNJAN SPORTS WEAR', shop_address text NOT NULL DEFAULT 'Kakamega, Kenya', latitude numeric(10,7), longitude numeric(10,7), google_maps_url text, whatsapp_number text NOT NULL DEFAULT '+254798777231', business_phone text, business_description text, maintenance_mode boolean NOT NULL DEFAULT false, maintenance_message text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_number text NOT NULL UNIQUE, customer_name text NOT NULL, customer_phone text NOT NULL, delivery_location text NOT NULL, preferred_delivery_date date NOT NULL, preferred_delivery_time text NOT NULL, additional_instructions text, status text NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','Confirmed','Preparing','Out for Delivery','Delivered','Cancelled')), total_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS order_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE, product_id uuid REFERENCES products(id) ON DELETE SET NULL, team_name text NOT NULL, product_name text NOT NULL, season text NOT NULL, jersey_type text NOT NULL, selected_size text NOT NULL, quantity integer NOT NULL CHECK (quantity BETWEEN 1 AND 100), unit_price numeric(12,2) NOT NULL CHECK (unit_price >= 0), created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS products_active_featured_idx ON products(active, featured);
 CREATE INDEX IF NOT EXISTS products_category_idx ON products(category);
+CREATE INDEX IF NOT EXISTS products_classification_idx ON products(classification);
 CREATE INDEX IF NOT EXISTS product_images_product_idx ON product_images(product_id, sort_order);
 CREATE INDEX IF NOT EXISTS orders_status_created_idx ON orders(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id);
@@ -27,8 +28,60 @@ DROP TRIGGER IF EXISTS orders_updated_at ON orders; CREATE TRIGGER orders_update
 CREATE OR REPLACE FUNCTION is_admin() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT EXISTS (SELECT 1 FROM admin_users WHERE user_id = auth.uid()); $$;
 REVOKE ALL ON FUNCTION is_admin() FROM PUBLIC; GRANT EXECUTE ON FUNCTION is_admin() TO anon, authenticated;
 CREATE OR REPLACE FUNCTION next_order_number() RETURNS text LANGUAGE plpgsql AS $$ DECLARE today text := to_char(current_date, 'YYYYMMDD'); next_number integer; BEGIN SELECT COALESCE(MAX((substring(order_number from 14))::integer), 0) + 1 INTO next_number FROM orders WHERE order_number LIKE 'MAP-' || today || '-%'; RETURN 'MAP-' || today || '-' || lpad(next_number::text, 4, '0'); END; $$;
-CREATE OR REPLACE FUNCTION place_public_order(p_customer_name text,p_customer_phone text,p_delivery_location text,p_preferred_delivery_date date,p_preferred_delivery_time text,p_additional_instructions text,p_product_id uuid,p_size text,p_quantity integer) RETURNS json LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ DECLARE product_row products%ROWTYPE; new_order orders%ROWTYPE; total numeric(12,2); BEGIN IF length(trim(p_customer_name)) < 2 OR length(trim(p_customer_phone)) < 7 OR p_quantity IS NULL OR p_quantity < 1 OR p_quantity > 100 THEN RAISE EXCEPTION 'Invalid order details'; END IF; SELECT * INTO product_row FROM products WHERE id = p_product_id AND active = true FOR UPDATE; IF product_row.id IS NULL OR product_row.stock_quantity < p_quantity OR NOT (p_size = ANY(product_row.available_sizes)) THEN RAISE EXCEPTION 'Product is unavailable'; END IF; total := product_row.current_price * p_quantity; INSERT INTO orders(order_number,customer_name,customer_phone,delivery_location,preferred_delivery_date,preferred_delivery_time,additional_instructions,total_amount) VALUES(next_order_number(),trim(p_customer_name),trim(p_customer_phone),trim(p_delivery_location),p_preferred_delivery_date,trim(p_preferred_delivery_time),nullif(trim(p_additional_instructions),''),total) RETURNING * INTO new_order; INSERT INTO order_items(order_id,product_id,team_name,product_name,season,jersey_type,selected_size,quantity,unit_price) VALUES(new_order.id,product_row.id,product_row.team_name,product_row.product_name,product_row.season,product_row.jersey_type,p_size,p_quantity,product_row.current_price); UPDATE products SET stock_quantity = stock_quantity - p_quantity WHERE id = product_row.id; RETURN json_build_object('order_id',new_order.id,'order_number',new_order.order_number,'total_amount',total); END; $$;
-REVOKE ALL ON FUNCTION place_public_order(text,text,text,date,text,text,uuid,text,integer) FROM PUBLIC; GRANT EXECUTE ON FUNCTION place_public_order(text,text,text,date,text,text,uuid,text,integer) TO anon, authenticated;
+CREATE OR REPLACE FUNCTION place_public_order_multi(p_customer_name text, p_customer_phone text, p_delivery_location text, p_preferred_delivery_date date, p_preferred_delivery_time text, p_additional_instructions text, p_items json) RETURNS json LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  maintenance_on boolean;
+  new_order orders%ROWTYPE;
+  total numeric(12,2) := 0;
+  item json;
+  product_row products%ROWTYPE;
+  item_count integer := 0;
+BEGIN
+  SELECT maintenance_mode INTO maintenance_on FROM shop_settings LIMIT 1;
+  IF maintenance_on THEN
+    RAISE EXCEPTION 'The shop is currently under maintenance. Please try again later.';
+  END IF;
+
+  IF length(trim(p_customer_name)) < 2 OR length(trim(p_customer_phone)) < 7 THEN
+    RAISE EXCEPTION 'Invalid order details';
+  END IF;
+
+  IF NOT (p_items IS NOT NULL AND json_typeof(p_items) = 'array' AND json_array_length(p_items) > 0) THEN
+    RAISE EXCEPTION 'No items in order';
+  END IF;
+
+  INSERT INTO orders(order_number, customer_name, customer_phone, delivery_location, preferred_delivery_date, preferred_delivery_time, additional_instructions, total_amount)
+  VALUES(next_order_number(), trim(p_customer_name), trim(p_customer_phone), trim(p_delivery_location), p_preferred_delivery_date, trim(p_preferred_delivery_time), nullif(trim(p_additional_instructions), ''), 0)
+  RETURNING * INTO new_order;
+
+  FOR item IN SELECT * FROM json_array_elements(p_items)
+  LOOP
+    item_count := item_count + 1;
+    SELECT * INTO product_row FROM products WHERE id = (item->>'product_id')::uuid AND active = true FOR UPDATE;
+    IF product_row.id IS NULL THEN
+      RAISE EXCEPTION 'Product is unavailable';
+    END IF;
+    IF product_row.stock_quantity < (item->>'quantity')::integer THEN
+      RAISE EXCEPTION 'Insufficient stock for %', product_row.product_name;
+    END IF;
+    IF NOT ((item->>'size') = ANY(product_row.available_sizes)) THEN
+      RAISE EXCEPTION 'Invalid size for %', product_row.product_name;
+    END IF;
+
+    total := total + product_row.current_price * (item->>'quantity')::integer;
+
+    INSERT INTO order_items(order_id, product_id, team_name, product_name, season, jersey_type, selected_size, quantity, unit_price)
+    VALUES(new_order.id, product_row.id, product_row.team_name, product_row.product_name, product_row.season, product_row.jersey_type, item->>'size', (item->>'quantity')::integer, product_row.current_price);
+
+    UPDATE products SET stock_quantity = stock_quantity - (item->>'quantity')::integer WHERE id = product_row.id;
+  END LOOP;
+
+  UPDATE orders SET total_amount = total WHERE id = new_order.id;
+
+  RETURN json_build_object('order_id', new_order.id, 'order_number', new_order.order_number, 'total_amount', total);
+END;
+$$;
+REVOKE ALL ON FUNCTION place_public_order_multi(text, text, text, date, text, text, json) FROM PUBLIC; GRANT EXECUTE ON FUNCTION place_public_order_multi(text, text, text, date, text, text, json) TO anon, authenticated;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY; ALTER TABLE products ENABLE ROW LEVEL SECURITY; ALTER TABLE product_images ENABLE ROW LEVEL SECURITY; ALTER TABLE orders ENABLE ROW LEVEL SECURITY; ALTER TABLE order_items ENABLE ROW LEVEL SECURITY; ALTER TABLE delivery_locations ENABLE ROW LEVEL SECURITY; ALTER TABLE shop_settings ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS admin_users_select_admin ON admin_users; CREATE POLICY admin_users_select_admin ON admin_users FOR SELECT TO authenticated USING (is_admin());
 DROP POLICY IF EXISTS products_public_read ON products; CREATE POLICY products_public_read ON products FOR SELECT TO anon, authenticated USING (active = true OR is_admin());
