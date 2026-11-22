@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Edit2, Trash2, Package } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Package, Copy } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Product, formatKES, CATEGORY_OPTIONS, Category } from '@/lib/types';
+import { Product, formatKES, CATEGORY_OPTIONS, Category, ProductClassification, CLASSIFICATION_OPTIONS } from '@/lib/types';
 import { Loading, EmptyState, ErrorState, ConfirmDialog, Toast } from './ui';
 
 export function AdminProducts({ navigate }: { navigate: (to: string) => void }) {
@@ -10,6 +10,7 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const [classificationFilter, setClassificationFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [sortBy, setSortBy] = useState('created_desc');
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
@@ -37,6 +38,7 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
       list = list.filter((p) => `${p.product_name} ${p.team_name} ${p.season}`.toLowerCase().includes(q));
     }
     if (categoryFilter !== 'All') list = list.filter((p) => p.category === categoryFilter);
+    if (classificationFilter !== 'All') list = list.filter((p) => p.classification === classificationFilter);
     if (statusFilter === 'Active') list = list.filter((p) => p.active);
     if (statusFilter === 'Inactive') list = list.filter((p) => !p.active);
     const [field, dir] = sortBy.split('_');
@@ -49,7 +51,7 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
       return dir === 'desc' ? -cmp : cmp;
     });
     return list;
-  }, [products, search, categoryFilter, statusFilter, sortBy]);
+  }, [products, search, categoryFilter, classificationFilter, statusFilter, sortBy]);
 
   async function confirmDelete() {
     if (!deleteTarget || !supabase) return;
@@ -94,6 +96,10 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
             <option value="All">All categories</option>
             {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+          <select value={classificationFilter} onChange={(e) => setClassificationFilter(e.target.value)}>
+            <option value="All">All classifications</option>
+            {CLASSIFICATION_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="All">All status</option>
             <option value="Active">Active</option>
@@ -128,6 +134,7 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
                   <th>Image</th>
                   <th>Product</th>
                   <th>Category</th>
+                  <th>Classification</th>
                   <th>Season</th>
                   <th>Price</th>
                   <th>Stock</th>
@@ -151,6 +158,11 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
                       <span className="admin-sub-text">{p.team_name} · {p.jersey_type}</span>
                     </td>
                     <td>{p.category}</td>
+                    <td>
+                      <span className={`admin-classification-badge admin-classification-${(p.classification || 'Regular').toLowerCase().replace(/\s+/g, '-')}`}>
+                        {p.classification || 'Regular'}
+                      </span>
+                    </td>
                     <td>{p.season}</td>
                     <td>
                       {formatKES(p.current_price)}
@@ -166,6 +178,9 @@ export function AdminProducts({ navigate }: { navigate: (to: string) => void }) 
                     <td className="admin-row-actions">
                       <button className="admin-btn admin-btn-sm admin-btn-ghost" onClick={() => navigate(`/admin/products/${p.id}/edit`)}>
                         <Edit2 size={14} /> Edit
+                      </button>
+                      <button className="admin-btn admin-btn-sm admin-btn-duplicate" onClick={() => navigate(`/admin/products/${p.id}/duplicate`)}>
+                        <Copy size={14} /> Duplicate
                       </button>
                       <button className="admin-btn admin-btn-sm admin-btn-danger-outline" onClick={() => setDeleteTarget(p)}>
                         <Trash2 size={14} /> Delete

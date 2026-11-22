@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Save, Store, Phone, MapPin } from 'lucide-react';
+import { Save, Store, Phone, MapPin, Wrench, Power } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { ShopSettings } from '@/lib/types';
-import { Loading, ErrorState, Toast } from './ui';
+import { Loading, ErrorState, Toast, ConfirmDialog } from './ui';
 
 export function AdminSettings() {
   const [settings, setSettings] = useState<ShopSettings | null>(null);
@@ -11,10 +11,13 @@ export function AdminSettings() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [maintenanceConfirm, setMaintenanceConfirm] = useState(false);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
 
   const [form, setForm] = useState({
     shop_name: '', shop_address: '', whatsapp_number: '', business_phone: '',
     business_description: '', google_maps_url: '', latitude: '', longitude: '',
+    maintenance_message: '',
   });
 
   useEffect(() => {
@@ -29,6 +32,7 @@ export function AdminSettings() {
           business_phone: s.business_phone || '', business_description: s.business_description || '',
           google_maps_url: s.google_maps_url || '', latitude: s.latitude ? String(s.latitude) : '',
           longitude: s.longitude ? String(s.longitude) : '',
+          maintenance_message: s.maintenance_message || '',
         });
       }
       setLoading(false);
@@ -54,6 +58,7 @@ export function AdminSettings() {
       google_maps_url: form.google_maps_url.trim() || null,
       latitude: form.latitude ? parseFloat(form.latitude) : null,
       longitude: form.longitude ? parseFloat(form.longitude) : null,
+      maintenance_message: form.maintenance_message.trim() || null,
     };
     if (settings) {
       const { error: err } = await supabase.from('shop_settings').update(payload).eq('id', settings.id);
@@ -69,11 +74,60 @@ export function AdminSettings() {
     }
   }
 
+  async function toggleMaintenance() {
+    if (!supabase || !settings) return;
+    setMaintenanceConfirm(false);
+    setMaintenanceLoading(true);
+    const newValue = !settings.maintenance_mode;
+    const { error: err } = await supabase.from('shop_settings').update({ maintenance_mode: newValue }).eq('id', settings.id);
+    setMaintenanceLoading(false);
+    if (err) {
+      setToast({ message: 'Failed to toggle maintenance mode: ' + err.message, type: 'error' });
+    } else {
+      setSettings({ ...settings, maintenance_mode: newValue });
+      setToast({ message: newValue ? 'Maintenance mode ENABLED. The shop is now hidden from customers.' : 'Maintenance mode DISABLED. The shop is live again.', type: 'success' });
+    }
+  }
+
   if (loading) return <Loading label="Loading settings..." />;
   if (error) return <ErrorState message={error} />;
 
   return (
     <div className="admin-settings-page">
+      <div className={`admin-panel admin-maintenance-panel ${settings?.maintenance_mode ? 'admin-maintenance-on' : ''}`}>
+        <div className="admin-panel-heading">
+          <div>
+            <p className="eyebrow">Shop status</p>
+            <h2>Maintenance Mode</h2>
+          </div>
+          <span className={`admin-maintenance-status ${settings?.maintenance_mode ? 'is-on' : 'is-off'}`}>
+            <Power size={14} /> {settings?.maintenance_mode ? 'ENABLED' : 'DISABLED'}
+          </span>
+        </div>
+        <p className="admin-maintenance-desc">
+          When enabled, customers see a maintenance page and cannot place orders. Order creation is also blocked at the database level. You (the administrator) can still log in and manage everything.
+        </p>
+        <label className="admin-field admin-field-full">
+          <span>Custom maintenance message <small>(optional)</small></span>
+          <textarea rows={2} value={form.maintenance_message} onChange={(e) => update('maintenance_message', e.target.value)} placeholder="MAPUNJAN SPORTS WEAR is currently undergoing scheduled maintenance. We're working to improve your shopping experience." />
+        </label>
+        <div className="admin-form-actions">
+          <button
+            className={`admin-btn ${settings?.maintenance_mode ? 'admin-btn-danger' : 'admin-btn-dark'}`}
+            disabled={maintenanceLoading}
+            onClick={() => {
+              if (settings?.maintenance_mode) {
+                toggleMaintenance();
+              } else {
+                setMaintenanceConfirm(true);
+              }
+            }}
+          >
+            <Wrench size={16} /> {maintenanceLoading ? 'Updating...' : settings?.maintenance_mode ? 'Disable Maintenance Mode' : 'Enable Maintenance Mode'}
+          </button>
+        </div>
+      </div>
+
       <div className="admin-settings-grid">
         <div className="admin-panel">
           <div className="admin-panel-heading">
@@ -132,6 +186,15 @@ export function AdminSettings() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={maintenanceConfirm}
+        title="Enable maintenance mode?"
+        message="Are you sure you want to enable maintenance mode? Customers will temporarily be unable to access the shop."
+        confirmLabel="Enable Maintenance"
+        onConfirm={toggleMaintenance}
+        onCancel={() => setMaintenanceConfirm(false)}
+      />
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );

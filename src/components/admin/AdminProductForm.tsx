@@ -1,7 +1,7 @@
 import { useEffect, useState, FormEvent } from 'react';
-import { Upload, X, Star, Trash2, ArrowLeft, Image as ImageIcon } from 'lucide-react';
+import { Upload, X, Star, Trash2, ArrowLeft, Image as ImageIcon, Copy } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Product, ProductImage, Category, CATEGORY_OPTIONS, SIZE_OPTIONS } from '@/lib/types';
+import { Product, ProductImage, Category, ProductClassification, CATEGORY_OPTIONS, CLASSIFICATION_OPTIONS, SIZE_OPTIONS } from '@/lib/types';
 import { Loading, ErrorState, Toast } from './ui';
 
 interface ProductFormState {
@@ -10,6 +10,7 @@ interface ProductFormState {
   category: Category;
   season: string;
   jersey_type: string;
+  classification: ProductClassification;
   description: string;
   previous_price: string;
   current_price: string;
@@ -21,34 +22,38 @@ interface ProductFormState {
 
 const emptyForm: ProductFormState = {
   team_name: '', product_name: '', category: 'Football', season: '', jersey_type: '',
-  description: '', previous_price: '', current_price: '', available_sizes: ['S', 'M', 'L', 'XL'],
-  stock_quantity: '0', featured: false, active: true,
+  classification: 'Regular', description: '', previous_price: '', current_price: '',
+  available_sizes: ['S', 'M', 'L', 'XL'], stock_quantity: '0', featured: false, active: true,
 };
 
 export function AdminProductForm({
   productId,
+  sourceProductId,
   navigate,
 }: {
   productId?: string;
+  sourceProductId?: string;
   navigate: (to: string) => void;
 }) {
   const isEdit = Boolean(productId);
+  const isDuplicate = Boolean(sourceProductId);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
   const [existingImages, setExistingImages] = useState<ProductImage[]>([]);
   const [newFiles, setNewFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
   const [primaryIndex, setPrimaryIndex] = useState(0);
-  const [loading, setLoading] = useState(isEdit);
+  const [loading, setLoading] = useState(isEdit || isDuplicate);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
-    if (!productId || !supabase) return;
+    const loadId = productId || sourceProductId;
+    if (!loadId || !supabase) return;
     supabase.from('products')
       .select('*, product_images(*)')
-      .eq('id', productId)
+      .eq('id', loadId)
       .maybeSingle()
       .then(({ data, error: err }) => {
         if (err || !data) { setError('Could not load product.'); setLoading(false); return; }
@@ -59,6 +64,7 @@ export function AdminProductForm({
           category: p.category,
           season: p.season,
           jersey_type: p.jersey_type,
+          classification: p.classification || 'Regular',
           description: p.description || '',
           previous_price: String(p.previous_price),
           current_price: String(p.current_price),
@@ -70,7 +76,7 @@ export function AdminProductForm({
         setExistingImages(p.product_images || []);
         setLoading(false);
       });
-  }, [productId]);
+  }, [productId, sourceProductId]);
 
   function update<K extends keyof ProductFormState>(key: K, value: ProductFormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -147,6 +153,7 @@ export function AdminProductForm({
       category: form.category,
       season: form.season.trim(),
       jersey_type: form.jersey_type.trim(),
+      classification: form.classification,
       description: form.description.trim() || null,
       previous_price: parseFloat(form.previous_price),
       current_price: parseFloat(form.current_price),
@@ -164,6 +171,17 @@ export function AdminProductForm({
       const { data, error: err } = await supabase.from('products').insert(payload).select().maybeSingle();
       if (err || !data) { setFormError('Failed to create product: ' + (err?.message || 'Unknown error')); setSaving(false); return; }
       prodId = data.id;
+    }
+
+    if (isDuplicate && prodId && existingImages.length > 0) {
+      const imageRecords = existingImages.map((img, idx) => ({
+        product_id: prodId,
+        image_url: img.image_url,
+        storage_path: null,
+        is_primary: idx === 0,
+        sort_order: idx,
+      }));
+      await supabase.from('product_images').insert(imageRecords);
     }
 
     if (newFiles.length > 0 && prodId) {
@@ -190,7 +208,7 @@ export function AdminProductForm({
     }
 
     setSaving(false);
-    setToast({ message: isEdit ? 'Product updated successfully.' : 'Product created successfully.', type: 'success' });
+    setToast({ message: isEdit ? 'Product updated successfully.' : (isDuplicate ? 'Product duplicated successfully.' : 'Product created successfully.'), type: 'success' });
     setTimeout(() => navigate('/admin/products'), 1000);
   }
 
@@ -202,6 +220,12 @@ export function AdminProductForm({
       <button className="admin-back-btn" onClick={() => navigate('/admin/products')}>
         <ArrowLeft size={16} /> Back to products
       </button>
+      {isDuplicate && (
+        <div className="admin-duplicate-banner">
+          <Copy size={18} />
+          <span>Duplicating product — a <strong>new</strong> product will be created. Change any details below before saving.</span>
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="admin-form">
         <div className="admin-form-grid">
           <label className="admin-field">
@@ -227,8 +251,21 @@ export function AdminProductForm({
             <input value={form.jersey_type} onChange={(e) => update('jersey_type', e.target.value)} placeholder="e.g. Home, Away, Third" />
           </label>
           <label className="admin-field">
+            <span>Classification *</span>
+            <select value={form.classification} onChange={(e) => update('classification', e.target.value as ProductClassification)}>
+              {CLASSIFICATION_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="admin-field">
             <span>Stock quantity *</span>
             <input type="number" min="0" value={form.stock_quantity} onChange={(e) => update('stock_quantity', e.target.value)} />
+          </label>
+          <label className="admin-field">
+            <span>Featured</span>
+            <select value={form.featured ? 'yes' : 'no'} onChange={(e) => update('featured', e.target.value === 'yes')}>
+              <option value="no">Not featured</option>
+              <option value="yes">Featured product</option>
+            </select>
           </label>
           <label className="admin-field">
             <span>Previous price (KES) *</span>
@@ -263,17 +300,28 @@ export function AdminProductForm({
 
         <div className="admin-checkbox-row">
           <label className="admin-checkbox">
-            <input type="checkbox" checked={form.featured} onChange={(e) => update('featured', e.target.checked)} />
-            <span>Featured product</span>
-          </label>
-          <label className="admin-checkbox">
             <input type="checkbox" checked={form.active} onChange={(e) => update('active', e.target.checked)} />
             <span>Active (visible on storefront)</span>
           </label>
         </div>
 
         <div className="admin-field-group">
-          <span className="admin-field-label">Product images</span>
+          <span className="admin-field-label">Product images {isDuplicate && <small>(existing images will be copied to the new product)</small>}</span>
+          {isDuplicate ? (
+            <div className="admin-duplicate-images-info">
+              <p className="admin-sub-text"><ImageIcon size={14} /> {existingImages.length} image(s) will be reused from the source product. You can also upload new images below.</p>
+              {existingImages.length > 0 && (
+                <div className="admin-image-gallery">
+                  {existingImages.map((img) => (
+                    <div key={img.id} className={`admin-image-tile ${img.is_primary ? 'is-primary' : ''}`}>
+                      <img src={img.image_url} alt="" />
+                      {img.is_primary && <span className="admin-primary-badge">Primary</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
           <div className="admin-upload-area">
             <label className="admin-upload-drop">
               <input type="file" accept="image/*" multiple onChange={(e) => handleFiles(e.target.files)} style={{ display: 'none' }} />
@@ -283,7 +331,7 @@ export function AdminProductForm({
             </label>
           </div>
 
-          {(existingImages.length > 0 || previews.length > 0) && (
+          {!isDuplicate && existingImages.length > 0 && (
             <div className="admin-image-gallery">
               {existingImages.map((img) => (
                 <div key={img.id} className={`admin-image-tile ${img.is_primary ? 'is-primary' : ''}`}>
@@ -299,6 +347,11 @@ export function AdminProductForm({
                   {img.is_primary && <span className="admin-primary-badge">Primary</span>}
                 </div>
               ))}
+            </div>
+          )}
+
+          {previews.length > 0 && (
+            <div className="admin-image-gallery">
               {previews.map((url, i) => (
                 <div key={i} className={`admin-image-tile ${primaryIndex === i ? 'is-primary' : ''}`}>
                   <img src={url} alt="" />
@@ -315,7 +368,7 @@ export function AdminProductForm({
               ))}
             </div>
           )}
-          {existingImages.length === 0 && previews.length === 0 && (
+          {!isDuplicate && existingImages.length === 0 && previews.length === 0 && (
             <p className="admin-sub-text"><ImageIcon size={14} /> No images added yet.</p>
           )}
         </div>
@@ -325,7 +378,7 @@ export function AdminProductForm({
         <div className="admin-form-actions">
           <button type="button" className="admin-btn admin-btn-ghost" onClick={() => navigate('/admin/products')}>Cancel</button>
           <button type="submit" className="admin-btn admin-btn-gold" disabled={saving}>
-            {saving ? 'Saving...' : isEdit ? 'Save changes' : 'Create product'}
+            {saving ? 'Saving...' : isEdit ? 'Save changes' : isDuplicate ? 'Create duplicate product' : 'Create product'}
           </button>
         </div>
       </form>
