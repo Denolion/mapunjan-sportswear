@@ -1,28 +1,44 @@
 import { useEffect, useState } from 'react';
-import { Package, ShoppingCart, Clock3, CheckCircle2, TrendingUp, AlertTriangle, Boxes } from 'lucide-react';
+import { Package, ShoppingCart, Clock3, CheckCircle2, TrendingUp, AlertTriangle, Boxes, Wrench, Power } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Product, Order, formatKES, LOW_STOCK_THRESHOLD } from '@/lib/types';
-import { Loading, EmptyState, ErrorState } from './ui';
+import { Product, Order, ShopSettings, formatKES, LOW_STOCK_THRESHOLD } from '@/lib/types';
+import { Loading, EmptyState, ErrorState, Toast, ConfirmDialog } from './ui';
 
 export function AdminDashboard({ navigate }: { navigate: (to: string) => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [settings, setSettings] = useState<ShopSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [maintLoading, setMaintLoading] = useState(false);
+  const [maintConfirm, setMaintConfirm] = useState(false);
 
   useEffect(() => {
     if (!supabase) { setError('Database is not configured.'); setLoading(false); return; }
     Promise.all([
       supabase.from('products').select('*').order('created_at', { ascending: false }),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
-    ]).then(([pRes, oRes]) => {
+      supabase.from('shop_settings').select('*').limit(1).maybeSingle(),
+    ]).then(([pRes, oRes, sRes]) => {
       if (pRes.error) setError(pRes.error.message);
       else setProducts((pRes.data || []) as Product[]);
       if (oRes.error && !error) setError(oRes.error.message);
       else setOrders((oRes.data || []) as Order[]);
+      if (!sRes.error && sRes.data) setSettings(sRes.data as ShopSettings);
       setLoading(false);
     });
   }, []);
+
+  async function toggleMaintenance() {
+    if (!supabase || !settings) return;
+    setMaintConfirm(false);
+    setMaintLoading(true);
+    const newValue = !settings.maintenance_mode;
+    const { error: err } = await supabase.from('shop_settings').update({ maintenance_mode: newValue }).eq('id', settings.id);
+    setMaintLoading(false);
+    if (err) return;
+    setSettings({ ...settings, maintenance_mode: newValue });
+  }
 
   if (loading) return <Loading label="Loading dashboard..." />;
   if (error) return <ErrorState message={error} />;
@@ -58,6 +74,14 @@ export function AdminDashboard({ navigate }: { navigate: (to: string) => void })
           </div>
         ))}
       </div>
+
+      {settings?.maintenance_mode && (
+        <div className="admin-alert admin-alert-warning">
+          <Power size={18} />
+          <span><strong>Maintenance mode is ON.</strong> The shop is hidden from customers.</span>
+          <button className="admin-btn admin-btn-sm admin-btn-ghost" onClick={() => navigate('/admin/settings')}>Manage in settings</button>
+        </div>
+      )}
 
       {lowStock.length > 0 && (
         <div className="admin-alert admin-alert-warning">
